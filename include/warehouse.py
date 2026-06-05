@@ -15,10 +15,6 @@ CONN_ID = "warehouse_postgres"
 SCHEMA_SQL = os.path.join(os.path.dirname(__file__), "sql", "schema.sql")
 
 
-def _engine(conn_id: str = CONN_ID):
-    return PostgresHook(postgres_conn_id=conn_id).get_sqlalchemy_engine()
-
-
 def create_schema(conn_id: str = CONN_ID) -> None:
     """Run the idempotent CREATE TABLE statements."""
     with open(SCHEMA_SQL) as f:
@@ -32,10 +28,24 @@ def load_fact(df: pd.DataFrame, ds: str, conn_id: str = CONN_ID) -> int:
 
     Deletes any existing rows for ``ds`` first so re-running the DAG for a date
     never double-counts (the classic backfill-safe load pattern).
+
+    We use the hook's native ``insert_rows`` (DBAPI) instead of ``df.to_sql``:
+    Airflow's SQLAlchemy engine isn't reliably recognized by pandas across
+    versions (it raises ``'Engine' object has no attribute 'cursor'``).
+    ``astype(object)`` first converts numpy scalars (int64/float64/datetime64)
+    into plain Python types that psycopg2 can adapt.
     """
     hook = PostgresHook(postgres_conn_id=conn_id)
     hook.run("DELETE FROM fact_sales WHERE order_date = %s", parameters=(ds,))
-    df.to_sql("fact_sales", _engine(conn_id), if_exists="append", index=False)
+
+    safe = df.astype(object).where(pd.notnull(df), None)
+    rows = list(safe.itertuples(index=False, name=None))
+    hook.insert_rows(
+        table="fact_sales",
+        rows=rows,
+        target_fields=list(df.columns),
+        commit_every=500,
+    )
     return len(df)
 
 
@@ -62,5 +72,14 @@ def build_daily_aggregate(ds: str, conn_id: str = CONN_ID) -> None:
 
 
 def read_aggregate(conn_id: str = CONN_ID) -> pd.DataFrame:
-    """Return the full daily aggregate table (used by the analytics layer)."""
-    return pd.read_sql("SELECT * FROM agg_daily_sales ORDER BY order_date", _engine(conn_id))
+    """Return the full daily aggregate table (used by the analytics layer).
+
+    Reads through the raw psycopg2 connection (which exposes ``.cursor()``),
+    avoiding the same pandas/SQLAlchemy-engine pitfall as ``load_fact``.
+    """
+    hook = PostgresHook(postgres_conn_id=conn_id)
+    conn = hook.get_conn()
+    try:
+        return pd.read_sql("SELECT * FROM agg_daily_sales ORDER BY order_date", conn)
+    finally:
+        conn.close()

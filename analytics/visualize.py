@@ -13,11 +13,13 @@ import os
 
 import matplotlib
 import pandas as pd
+import psycopg2
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 # Override with env var if you changed the compose ports/creds.
+# psycopg2 accepts the postgresql:// URL directly as a DSN — no SQLAlchemy needed.
 DB_URL = os.environ.get(
     "WAREHOUSE_URL", "postgresql://warehouse:warehouse@localhost:5433/sales"
 )
@@ -25,19 +27,23 @@ OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "reports")
 
 
 def main() -> None:
-    df = pd.read_sql("SELECT * FROM agg_daily_sales ORDER BY order_date", DB_URL)
-    if df.empty:
-        print("Warehouse is empty. Trigger the `sales_etl` DAG first.")
-        return
+    conn = psycopg2.connect(DB_URL)
+    try:
+        df = pd.read_sql("SELECT * FROM agg_daily_sales ORDER BY order_date", conn)
+        if df.empty:
+            print("Warehouse is empty. Trigger the `sales_etl` DAG first.")
+            return
 
-    # Headline numbers in the terminal.
-    print("\n=== Top products by revenue ===")
-    fact = pd.read_sql(
-        "SELECT product, SUM(revenue) AS revenue, SUM(quantity) AS units "
-        "FROM fact_sales GROUP BY product ORDER BY revenue DESC LIMIT 10",
-        DB_URL,
-    )
-    print(fact.to_markdown(index=False))
+        # Headline numbers in the terminal.
+        print("\n=== Top products by revenue ===")
+        fact = pd.read_sql(
+            "SELECT product, SUM(revenue) AS revenue, SUM(quantity) AS units "
+            "FROM fact_sales GROUP BY product ORDER BY revenue DESC LIMIT 10",
+            conn,
+        )
+        print(fact.to_markdown(index=False))
+    finally:
+        conn.close()
 
     print(f"\nTotal revenue: {df['revenue'].sum():,.2f}")
     print(f"Days loaded:   {df['order_date'].nunique()}")
