@@ -1,0 +1,17 @@
+# Airflow runtime
+logs/*
+!logs/.gitkeep
+plugins/*
+!plugins/.gitkeep
+
+# Generated data & reports
+data/raw/*
+data/processed/*
+data/reports/*
+!data/**/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

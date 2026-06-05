@@ -1,0 +1,108 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Sales ETL workshop — Airflow (LocalExecutor) + a separate Postgres "warehouse".
+#
+#   metadata-postgres   : Airflow's own bookkeeping DB (DAG runs, task state)
+#   warehouse-postgres  : where our cleaned sales data lands (the "analytics" DB)
+#   airflow-init        : one-shot setup (db migrate + create admin user)
+#   airflow-webserver   : the UI at http://localhost:8080
+#   airflow-scheduler   : runs the DAGs
+#
+# Start with:   docker compose up -d --build
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-airflow-common: &airflow-common
+  build: .                       # uses ./Dockerfile (Airflow + our requirements)
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@metadata-postgres:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    # Let our DAG `import` the helper modules under include/
+    PYTHONPATH: /opt/airflow:/opt/airflow/include
+    # Auto-registers the warehouse connection (id: warehouse_postgres) from .env
+    AIRFLOW_CONN_WAREHOUSE_POSTGRES: ${AIRFLOW_CONN_WAREHOUSE_POSTGRES}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./include:/opt/airflow/include
+    - ./data:/opt/airflow/data
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./config:/opt/airflow/config
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    metadata-postgres:
+      condition: service_healthy
+
+services:
+  metadata-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - metadata-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    restart: always
+
+  warehouse-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: warehouse
+      POSTGRES_PASSWORD: warehouse
+      POSTGRES_DB: sales
+    ports:
+      - "5433:5432"            # reachable from your host at localhost:5433
+    volumes:
+      - warehouse-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "warehouse"]
+      interval: 5s
+      retries: 5
+    restart: always
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username "${_AIRFLOW_WWW_USER_USERNAME:-airflow}" \
+          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" \
+          --firstname admin --lastname admin --role Admin \
+          --email admin@example.com || true
+    restart: on-failure
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  metadata-db:
+  warehouse-db:

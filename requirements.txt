@@ -1,0 +1,7 @@
+# Extra Python libs baked into the Airflow image (see Dockerfile).
+# pandas & psycopg2-binary already ship in the base image, but we pin/declare
+# the ones our DAG and analytics code import directly.
+Faker==33.1.0
+matplotlib==3.10.0
+pandas==2.2.3
+tabulate==0.9.0
