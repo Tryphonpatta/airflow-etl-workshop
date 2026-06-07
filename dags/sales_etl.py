@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import pendulum
 from airflow.decorators import dag, task
+from airflow.models.param import Param
+
 
 from include import generator, transform as transform_mod, warehouse, reporting
 
@@ -33,12 +35,15 @@ PROCESSED_DIR = "/opt/airflow/data/processed"
 @dag(
     dag_id="sales_etl",
     description="Generate → clean → load → aggregate → visualize daily sales",
-    schedule="@daily",
+    schedule="0 6 * * *",
     start_date=pendulum.datetime(2026, 6, 1, tz="UTC"),
     catchup=False,                # set True (and unpause) to backfill history
     max_active_runs=1,
     default_args={"retries": 1, "retry_delay": pendulum.duration(minutes=2)},
     tags=["workshop", "etl", "sales"],
+    params={
+         "rows": Param(400, type="integer", minimum=100),
+    },
 )
 def sales_etl():
 
@@ -83,6 +88,12 @@ def sales_etl():
         """VISUALIZE: regenerate the matplotlib charts from the warehouse."""
         return reporting.build_charts()
 
+    @task
+    def build_total_daily(ds: str | None = None) -> None:
+        """AGGREGATE: build the total_daily_sales table for this date."""
+        warehouse.build_total_daily(ds)
+        # pass
+
     # ---- wire up the dependency graph ----
     raw = generate_raw_data()
     processed = transform_data(raw)
@@ -93,6 +104,9 @@ def sales_etl():
 
     agg = build_daily_aggregate()
     loaded >> agg
+
+    total_daily = build_total_daily()
+    agg >> total_daily
 
     qc = data_quality_check(loaded)
 

@@ -28,3 +28,13 @@ CREATE TABLE IF NOT EXISTS agg_daily_sales (
     revenue    NUMERIC(14, 2),
     PRIMARY KEY (order_date, region, category)
 );
+
+
+CREATE TABLE IF NOT EXISTS total_daily_sales (
+    order_date DATE ,
+    region     TEXT,
+    orders     INTEGER,
+    units      INTEGER,
+    revenue    NUMERIC(14, 2),
+    PRIMARY KEY (order_date, region)
+)

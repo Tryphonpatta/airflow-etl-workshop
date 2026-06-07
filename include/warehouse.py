@@ -70,6 +70,14 @@ def build_daily_aggregate(ds: str, conn_id: str = CONN_ID) -> None:
         parameters={"ds": ds},
     )
 
+def read_fact(conn_id: str = CONN_ID) -> pd.DataFrame:
+    """Return the fact_sales rows for one date (used by the analytics layer)."""
+    hook = PostgresHook(postgres_conn_id=conn_id)
+    conn = hook.get_conn()
+    try:
+        return pd.read_sql("SELECT * FROM fact_sales", conn)
+    finally:
+        conn.close()
 
 def read_aggregate(conn_id: str = CONN_ID) -> pd.DataFrame:
     """Return the full daily aggregate table (used by the analytics layer).
@@ -83,3 +91,24 @@ def read_aggregate(conn_id: str = CONN_ID) -> pd.DataFrame:
         return pd.read_sql("SELECT * FROM agg_daily_sales ORDER BY order_date", conn)
     finally:
         conn.close()
+
+
+def build_total_daily(ds: str, conn_id: str = CONN_ID) -> None:
+    """Refresh agg_daily_sales for one date from fact_sales."""
+    hook = PostgresHook(postgres_conn_id=conn_id)
+    hook.run(
+        """
+        DELETE FROM total_daily_sales WHERE order_date = %(ds)s;
+
+        INSERT INTO total_daily_sales (order_date, region, orders, units, revenue)
+        SELECT order_date,
+               region,
+               COUNT(*)        AS orders,
+               SUM(quantity)   AS units,
+               SUM(revenue)    AS revenue
+        FROM fact_sales
+        WHERE order_date = %(ds)s
+        GROUP BY order_date, region;
+        """,
+        parameters={"ds": ds},
+    )
